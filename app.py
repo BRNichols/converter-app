@@ -16,14 +16,16 @@ def index():
 
 @app.route("/api/rates", methods=["GET"])
 def get_rates():
-    """Fetch real-time fiat currency rates with 10-min caching."""
+    """Fetch fiat currency rates via Frankfurter API with 10-min caching."""
     now = time.time()
     if not CURRENCY_CACHE["rates"] or (now - CURRENCY_CACHE["updated_at"]) > CACHE_TTL:
         try:
-            response = requests.get("https://open.er-api.com/v6/latest/USD", timeout=5)
+            response = requests.get("https://api.frankfurter.dev/v1/latest?base=USD", timeout=5)
             data = response.json()
-            if data.get("result") == "success":
-                CURRENCY_CACHE["rates"] = data["rates"]
+            if "rates" in data:
+                rates = data["rates"]
+                rates["USD"] = 1.0  # Explicitly set base currency
+                CURRENCY_CACHE["rates"] = rates
                 CURRENCY_CACHE["updated_at"] = now
         except Exception as e:
             if not CURRENCY_CACHE["rates"]:
