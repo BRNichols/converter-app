@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Converter</title>
+    <!-- Leaflet.js CSS for Interactive Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --accent: #38bdf8; --text: #f8fafc; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); display: flex; justify-content: center; padding: 2rem 1rem; margin: 0; }
+        .card { background: var(--card); padding: 2rem; border-radius: 12px; width: 100%; max-width: 500px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5); }
+        h1 { font-size: 1.5rem; margin-top: 0; text-align: center; color: var(--accent); }
+        .group { margin-bottom: 1.2rem; }
+        label { display: block; font-size: 0.85rem; margin-bottom: 0.4rem; color: #94a3b8; }
+        select, input { width: 100%; padding: 0.75rem; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: var(--text); box-sizing: border-box; font-size: 1rem; }
+        
+        /* Grid with middle Swap Button */
+        .grid-swap { display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.5rem; align-items: end; }
+        .swap-btn {
+            background: #334155; color: var(--accent); border: 1px solid #475569;
+            padding: 0.75rem; border-radius: 6px; cursor: pointer; font-size: 1.2rem;
+            display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+            margin-bottom: 2px;
+        }
+        .swap-btn:hover { background: var(--accent); color: #0f172a; }
+
+        /* Result Box & Copy Button */
+        .result-box { margin-top: 1.5rem; padding: 1rem; background: #0f172a; border-radius: 8px; text-align: center; border: 1px solid #334155; position: relative; }
+        .result-val { font-size: 1.8rem; font-weight: bold; color: var(--accent); word-break: break-word; }
+        .copy-btn {
+            margin-top: 0.6rem; background: #334155; color: var(--text); border: none;
+            padding: 0.4rem 0.8rem; border-radius: 4px; font-size: 0.8rem; cursor: pointer;
+            transition: all 0.2s;
+        }
+        .copy-btn:hover { background: var(--accent); color: #0f172a; }
+        
+        /* Timezone Badges */
+        .badges-wrapper { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; margin-top: 0.5rem; }
+        .badge { display: inline-block; padding: 0.3rem 0.6rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600; background: #334155; color: #38bdf8; }
+        .badge-diff { background: #0f172a; border: 1px solid #334155; color: #f8fafc; }
+
+        #map { height: 220px; width: 100%; border-radius: 8px; margin-top: 1rem; border: 1px solid #334155; display: none; }
+        .map-hint { font-size: 0.75rem; color: #94a3b8; text-align: center; margin-top: 0.4rem; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>⚡ Universal Converter</h1>
+        
+        <div class="group">
+            <label>Category</label>
+            <select id="category" onchange="loadCategory()">
+                <option value="currency">Currency (Live FX)</option>
+                <option value="crypto">Cryptocurrency (Live Rates)</option>
+                <option value="timezone">Time Zone & Local Time</option>
+                <option value="temp">Temperature & Weather Map</option>
+                <option value="baking">Baking & Cooking Volume</option>
+                <option value="length">Length (Metric / Imperial)</option>
+                <option value="weight">Weight (Metric / Imperial)</option>
+            </select>
+        </div>
+
+        <div class="group">
+            <label id="amountLabel">Amount</label>
+            <input type="number" id="fromValue" value="1" step="any" oninput="convert()">
+        </div>
+
+        <div class="group grid-swap">
+            <div>
+                <label>From</label>
+                <select id="fromUnit" onchange="convert()"></select>
+            </div>
+            <button type="button" class="swap-btn" onclick="swapUnits()" title="Swap units">⇄</button>
+            <div>
+                <label>To</label>
+                <select id="toUnit" onchange="convert()"></select>
+            </div>
+        </div>
+
+        <div id="map"></div>
+        <div id="mapHint" class="map-hint">📍 Click anywhere on the map to load live local temperature</div>
+
+        <div class="result-box">
+            <label id="resultLabel">Converted Result</label>
+            <div id="result" class="result-val">0</div>
+            <div class="badges-wrapper">
+                <div id="tzDiffBadge" class="badge badge-diff" style="display: none;"></div>
+                <div id="tzBadge" class="badge" style="display: none;"></div>
+            </div>
+            <br>
+            <button type="button" id="copyBtn" class="copy-btn" onclick="copyResult()">📋 Copy Result</button>
+        </div>
+    </div>
+
+    <!-- Leaflet.js Map Library -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        let currencyRates = {};
+        let cryptoRates = {};
+        let map, marker;
+
+        const topCurrencies = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "CNY", "INR", "MXN", "BRL", "SGD"];
+        const topCryptos = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "LINK", "LTC", "DOT", "MATIC", "SHIB", "UNI", "NEAR", "USD", "EUR"];
+
+        const currencyNames = {
+            "USD": "US Dollar", "EUR": "Euro", "GBP": "British Pound", "CAD": "Canadian Dollar",
+            "AUD": "Australian Dollar", "JPY": "Japanese Yen", "CHF": "Swiss Franc", "CNY": "Chinese Yuan",
+            "INR": "Indian Rupee", "MXN": "Mexican Peso", "BRL": "Brazilian Real", "SGD": "Singapore Dollar"
+        };
+
+        const cryptoNames = {
+            "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "XRP": "XRP", "ADA": "Cardano",
+            "DOGE": "Dogecoin", "AVAX": "Avalanche", "LINK": "Chainlink", "LTC": "Litecoin",
+            "DOT": "Polkadot", "MATIC": "Polygon", "SHIB": "Shiba Inu", "UNI": "Uniswap",
+            "NEAR": "NEAR Protocol", "USD": "US Dollar", "EUR": "Euro"
+        };
+
+        const timezones = {
+            "America/New_York": "New York (EST/EDT)",
+            "America/Chicago": "Chicago (CST/CDT)",
+            "America/Denver": "Denver (MST/MDT)",
+            "America/Los_Angeles": "Los Angeles (PST/PDT)",
+            "America/Anchorage": "Anchorage (AKST/AKDT)",
+            "Pacific/Honolulu": "Honolulu (HST)",
+            "Europe/London": "London (GMT/BST)",
+            "Europe/Paris": "Paris / Berlin (CET/CEST)",
+            "Asia/Dubai": "Dubai (GST)",
+            "Asia/Kolkata": "India (IST)",
+            "Asia/Singapore": "Singapore (SGT)",
+            "Asia/Tokyo": "Tokyo (JST)",
+            "Australia/Sydney": "Sydney (AEST/AEDT)",
+            "Pacific/Auckland": "Auckland (NZST/NZDT)",
+            "UTC": "Coordinated Universal Time (UTC)"
+        };
+
+        const units = {
+            baking: { "Cup (US)": 236.588, "Tbsp (US)": 14.7868, "Tsp (US)": 4.92892, "Milliliter (ml)": 1, "Liter (L)": 1000, "Fluid Oz (US)": 29.5735 },
+            length: { "Meter": 1, "Kilometer": 1000, "Centimeter": 0.01, "Millimeter": 0.001, "Inch": 0.0254, "Foot": 0.3048, "Yard": 0.9144, "Mile": 1609.34 },
+            weight: { "Gram": 1, "Kilogram": 1000, "Ounce": 28.3495, "Pound": 453.592 },
+            temp: { "Celsius": "C", "Fahrenheit": "F", "Kelvin": "K" }
+        };
+
+        async function init() {
+            try {
+                const [fiatRes, cryptoRes] = await Promise.all([
+                    fetch('/api/rates'),
+                    fetch('/api/crypto')
+                ]);
+                currencyRates = await fiatRes.json();
+                cryptoRates = await cryptoRes.json();
+            } catch (err) {
+                console.error("Could not fetch rates", err);
+            }
+            loadCategory();
+        }
+
+        function loadCategory() {
+            const cat = document.getElementById('category').value;
+            const fromSelect = document.getElementById('fromUnit');
+            const toSelect = document.getElementById('toUnit');
+            const mapDiv = document.getElementById('map');
+            const mapHint = document.getElementById('mapHint');
+            const amountLabel = document.getElementById('amountLabel');
+            const fromValueInput = document.getElementById('fromValue');
+            const tzBadge = document.getElementById('tzBadge');
+            const tzDiffBadge = document.getElementById('tzDiffBadge');
+
+            fromSelect.innerHTML = '';
+            toSelect.innerHTML = '';
+            tzBadge.style.display = 'none';
+            tzDiffBadge.style.display = 'none';
+
+            if (cat === 'timezone') {
+                amountLabel.innerText = "Time (e.g. 3:23 PM, 15:23, 3:23)";
+                fromValueInput.type = "text";
+                fromValueInput.placeholder = "e.g. 3:23 PM";
+                if (fromValueInput.value === "1" || isNaN(parseFloat(fromValueInput.value))) {
+                    fromValueInput.value = "3:23 PM";
+                }
+            } else {
+                amountLabel.innerText = "Amount";
+                fromValueInput.type = "number";
+                fromValueInput.placeholder = "";
+                if (isNaN(parseFloat(fromValueInput.value))) {
+                    fromValueInput.value = "1";
+                }
+            }
+
+            if (cat === 'temp') {
+                mapDiv.style.display = 'block';
+                mapHint.style.display = 'block';
+                setupMap();
+            } else {
+                mapDiv.style.display = 'none';
+                mapHint.style.display = 'none';
+            }
+
+            if (cat === 'currency') {
+                const allRates = Object.keys(currencyRates).length ? Object.keys(currencyRates) : topCurrencies;
+                const topList = topCurrencies.filter(c => allRates.includes(c));
+                const remainingList = allRates.filter(c => !topCurrencies.includes(c)).sort();
+                [...topList, ...remainingList].forEach((code) => {
+                    const label = currencyNames[code] ? `${code} - ${currencyNames[code]}` : code;
+                    fromSelect.add(new Option(label, code));
+                    toSelect.add(new Option(label, code));
+                });
+            } else if (cat === 'crypto') {
+                const allCrypto = Object.keys(cryptoRates).length ? Object.keys(cryptoRates) : topCryptos;
+                const topList = topCryptos.filter(c => allCrypto.includes(c));
+                const remainingList = allCrypto.filter(c => !topCryptos.includes(c)).sort();
+                [...topList, ...remainingList].forEach((code) => {
+                    const label = cryptoNames[code] ? `${code} - ${cryptoNames[code]}` : code;
+                    fromSelect.add(new Option(label, code));
+                    toSelect.add(new Option(label, code));
+                });
+            } else if (cat === 'timezone') {
+                Object.keys(timezones).forEach((tzKey) => {
+                    fromSelect.add(new Option(timezones[tzKey], tzKey));
+                    toSelect.add(new Option(timezones[tzKey], tzKey));
+                });
+            } else {
+                Object.keys(units[cat]).forEach((unit) => {
+                    fromSelect.add(new Option(unit, unit));
+                    toSelect.add(new Option(unit, unit));
+                });
+            }
+
+            if (fromSelect.options.length > 1) toSelect.selectedIndex = 1;
+            convert();
+        }
+
+        function swapUnits() {
+            const fromSelect = document.getElementById('fromUnit');
+            const toSelect = document.getElementById('toUnit');
+            const temp = fromSelect.value;
+            fromSelect.value = toSelect.value;
+            toSelect.value = temp;
+            convert();
+        }
+
+        function copyResult() {
+            const resultText = document.getElementById('result').innerText;
+            navigator.clipboard.writeText(resultText).then(() => {
+                const btn = document.getElementById('copyBtn');
+                btn.innerText = "Copied! ✓";
+                btn.style.background = "#38bdf8";
+                btn.style.color = "#0f172a";
+                setTimeout(() => {
+                    btn.innerText = "📋 Copy Result";
+                    btn.style.background = "#334155";
+                    btn.style.color = "#f8fafc";
+                }, 1500);
+            });
+        }
+
+        function setupMap() {
+            if (!map) {
+                map = L.map('map').setView([20, 0], 2);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 18,
+                    attribution: '&copy; OpenStreetMap'
+                }).addTo(map);
+
+                map.on('click', async function(e) {
+                    const { lat, lng } = e.latlng;
+                    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&current=temperature_2m&temperature_unit=fahrenheit`;
+                    try {
+                        const res = await fetch(url);
+                        const data = await res.json();
+                        if (data && data.current && data.current.temperature_2m !== undefined) {
+                            const tempF = data.current.temperature_2m;
+                            if (marker) map.removeLayer(marker);
+                            marker = L.marker([lat, lng]).addTo(map)
+                                .bindPopup(`<b>Local Temp:</b> ${tempF}°F`).openPopup();
+                            
+                            document.getElementById('fromValue').value = tempF;
+                            document.getElementById('fromUnit').value = 'Fahrenheit';
+                            convert();
+                        }
+                    } catch (err) {
+                        console.error("Failed to fetch location temperature", err);
+                    }
+                });
+            }
+            setTimeout(() => { map.invalidateSize(); }, 100);
+        }
+
+        function parseTimeString(timeStr) {
+            if (!timeStr) return 0;
+            let str = timeStr.trim().toLowerCase();
+            let isPM = str.includes('pm');
+            let isAM = str.includes('am');
+            str = str.replace(/(am|pm)/g, '').trim();
+            
+            let h = 0, m = 0;
+            if (str.includes(':')) {
+                let parts = str.split(':');
+                h = parseInt(parts[0], 10) || 0;
+                m = parseInt(parts[1], 10) || 0;
+            } else {
+                let num = parseFloat(str) || 0;
+                h = Math.floor(num);
+                m = Math.round((num - h) * 60);
+            }
+
+            if (isPM && h < 12) h += 12;
+            if (isAM && h === 12) h = 0;
+
+            return h * 60 + m;
+        }
+
+        function convert() {
+            const cat = document.getElementById('category').value;
+            const rawVal = document.getElementById('fromValue').value;
+            const from = document.getElementById('fromUnit').value;
+            const to = document.getElementById('toUnit').value;
+            const tzBadge = document.getElementById('tzBadge');
+            const tzDiffBadge = document.getElementById('tzDiffBadge');
+
+            if (cat === 'timezone') {
+                convertTimezone(rawVal, from, to);
+                return;
+            }
+
+            tzBadge.style.display = 'none';
+            tzDiffBadge.style.display = 'none';
+            const val = parseFloat(rawVal) || 0;
+            let res = 0;
+
+            if (cat === 'currency') {
+                const inUSD = val / (currencyRates[from] || 1);
+                res = inUSD * (currencyRates[to] || 1);
+            } else if (cat === 'crypto') {
+                const rateFrom = parseFloat(cryptoRates[from]) || 1;
+                const rateTo = parseFloat(cryptoRates[to]) || 1;
+                const inUSD = val / rateFrom;
+                res = inUSD * rateTo;
+            } else if (cat === 'temp') {
+                res = convertTemp(val, from, to);
+            } else {
+                const inBase = val * units[cat][from];
+                res = inBase / units[cat][to];
+            }
+
+            const maxDecimals = cat === 'crypto' ? 8 : 4;
+            document.getElementById('result').innerText = res.toLocaleString(undefined, { maximumFractionDigits: maxDecimals });
+        }
+
+        function convertTimezone(rawVal, fromTZ, toTZ) {
+            const tzBadge = document.getElementById('tzBadge');
+            const tzDiffBadge = document.getElementById('tzDiffBadge');
+            const now = new Date();
+
+            function getOffsetMinutes(tz) {
+                const fmt = new Intl.DateTimeFormat('en-US', {
+                    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                });
+                const parts = {};
+                fmt.formatToParts(now).forEach(p => parts[p.type] = p.value);
+                const wallAsUTC = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour % 24, parts.minute, parts.second);
+                return (wallAsUTC - now.getTime()) / 60000;
+            }
+
+            const diffMins = getOffsetMinutes(toTZ) - getOffsetMinutes(fromTZ);
+            const inputMins = parseTimeString(rawVal);
+            const targetMins = inputMins + diffMins;
+
+            const daysShift = Math.floor(targetMins / 1440);
+            const normalizedMins = ((targetMins % 1440) + 1440) % 1440;
+            const hour = Math.floor(normalizedMins / 60);
+            const mins = Math.round(normalizedMins % 60);
+
+            const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            const minsStr = mins < 10 ? '0' + mins : mins;
+            let dayNotice = daysShift === 1 ? ' (+1 day)' : daysShift === -1 ? ' (-1 day)' : daysShift > 1 ? ` (+${daysShift} days)` : daysShift < -1 ? ` (${daysShift} days)` : '';
+
+            document.getElementById('result').innerText = `${displayHour}:${minsStr} ${ampm}${dayNotice}`;
+
+            // Calculate hours difference label
+            const diffHours = diffMins / 60;
+            let diffText = "";
+            if (diffHours === 0) {
+                diffText = "⏰ Same time zone";
+            } else if (diffHours > 0) {
+                diffText = `⏰ +${Number.isInteger(diffHours) ? diffHours : diffHours.toFixed(1)} hrs ahead`;
+            } else {
+                diffText = `⏰ ${Number.isInteger(Math.abs(diffHours)) ? Math.abs(diffHours) : Math.abs(diffHours).toFixed(1)} hrs behind`;
+            }
+
+            tzDiffBadge.innerText = diffText;
+            tzDiffBadge.style.display = 'inline-block';
+
+            tzBadge.style.display = 'inline-block';
+            if (hour >= 9 && hour < 17) {
+                tzBadge.innerText = '💼 Business Hours';
+                tzBadge.style.color = '#34d399';
+            } else if (hour >= 6 && hour < 20) {
+                tzBadge.innerText = '☀️ Daytime';
+                tzBadge.style.color = '#fbbf24';
+            } else {
+                tzBadge.innerText = '🌙 Night Time';
+                tzBadge.style.color = '#94a3b8';
+            }
+        }
+
+        function convertTemp(val, from, to) {
+            if (from === to) return val;
+            let celsius = from === 'Celsius' ? val : from === 'Fahrenheit' ? (val - 32) * 5/9 : val - 273.15;
+            return to === 'Celsius' ? celsius : to === 'Fahrenheit' ? (celsius * 9/5) + 32 : celsius + 273.15;
+        }
+
+        init();
+    </script>
+</body>
+</html>
